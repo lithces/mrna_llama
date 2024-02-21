@@ -17,3 +17,4 @@ events.out.tfevents*
 tests/reference_models
 
 *.so
+*.json

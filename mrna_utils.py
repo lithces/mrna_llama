@@ -22,7 +22,7 @@ def free_mem():
 
 class MRNATOK:
     def __init__(self, lst_nuc=list('XAUGC'), 
-                 chars_all = [chr(i) for i in range(ord('A'), ord('Z')+1)] + [chr(i) for i in range(ord('a'), ord('z')+1)]):
+                 chars_all = [chr(i) for i in range(ord('A'), ord('Z')+1)] + [chr(i) for i in range(ord('a'), ord('z')+1)], maxlen=20000):
         self.lst_nuc = lst_nuc
         self.chars_all = chars_all
         self.map_nuc = self.gen_mapping_for_nuc(offset=0)
@@ -43,7 +43,7 @@ class MRNATOK:
         self.offset_first = len(lst_special)
         self.offset_codon = self.offset_first + self.len_nuc  
         self.offset_last = self.offset_codon + (self.len_nuc**3)
-        self.maxlen = 6000
+        self.maxlen = maxlen
 
         # build mapping between tok and id
         lst_tok = []

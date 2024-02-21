@@ -24,7 +24,7 @@ columns = {
 import numpy as np
 from mrna_utils import *
 
-mrnatok = MRNATOK()
+mrnatok = MRNATOK(maxlen=20000)
 #%%
 # test code below
 if 0:
@@ -52,8 +52,8 @@ if 0:
 # tokenizer = AutoTokenizer.from_pretrained("NousResearch/Llama-2-7b-hf")
 # %%
 def myrun(
-    input_dir_root: str = "/data2/data/raw_seqs_cds_pos/",
-    output_dir_root: str = "/data2/data/raw_seqs_cds_pos/np_after_tok_mds/",
+    input_dir_root: str = "/home/lithtp/sanofi/mrna/mrna_llm/raw_seqs_cds_pos/",
+    output_dir_root: str = "/home/lithtp/sanofi/mrna/mrna_llm/raw_seqs_cds_pos/np_after_tok_mds/",
     mrna_cate: str = "rabbit",
 ) -> None:
     fi = f'{input_dir_root}/{mrna_cate}.parquet.snappy'
@@ -71,7 +71,7 @@ def myrun(
     with MDSWriter(out=data_out_path, columns=columns, compression=None, keep_local=True) as out:
         for dati in tqdm.tqdm(df.itertuples()):
             seq, st, ed = dati[1], dati[2], dati[3]
-            if mrnatok.validate_mrna(seq, st, ed) != 0:
+            if mrnatok.validate_mrna(seq, st, ed) != 0: # skip invalid mRNA seq
                 continue
 
             cret = mrnatok.get_ids(seq, st, ed)

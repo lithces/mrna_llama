@@ -31,6 +31,14 @@ from lit_gpt.model import GPT, Block, CausalSelfAttention, Config, LLaMAMLP
 from lit_gpt.utils import CycleIterator, chunked_cross_entropy, num_parameters
 
 
+from mamba_ssm.models.config_mamba import MambaConfig
+from mamba_ssm.models.mixer_seq_simple import *
+from mamba_ssm.models.mixer_seq_simple import _init_weights
+
+from mamba_ssm.modules.mamba_simple import Mamba, Block
+from mamba_ssm.utils.generation import GenerationMixin
+from mamba_ssm.utils.hf import load_config_hf, load_state_dict_hf
+
 #%%
 ######### DATASET SETUP, please test the loader before proceed
 from torch.utils.data import DataLoader
@@ -39,6 +47,9 @@ import torch
 from torch.utils.data import random_split, ConcatDataset
 
 class TokenTensorDataset(LocalDataset):
+    '''
+    padding with -1, later will be substituted in train function with vocab_size
+    '''
     def __init__(self, local, ctx_size):
         super().__init__(local=local)
         self.ctx_size = ctx_size+1 # need to add one for AR nature.
@@ -79,7 +90,7 @@ def create_dataloaders(batch_size, block_size):
         ,"rodents"
         ,"marsupials"
     ]
-    ds_root = '/data2/data/raw_seqs_cds_pos/np_after_tok_mds/'
+    ds_root = '/data2/data/mrna_llm/raw_seqs_cds_pos/np_after_tok_mds_th20000/'
 
 
 
@@ -103,8 +114,8 @@ from mrna_utils import *
 mrna_tok = MRNATOK()
 
 # System settings
-model_name = "tiny-llama-1.1b"
-name = "lit-tiny-llama-1.1b"
+# model_name = "tiny-llama-1.1b"
+name = "mamba"
 out_dir = Path(os.getenv("LIGHTNING_ARTIFACTS_DIR", "out")) / name
 logger_name = "tensorboard"
 devices = torch.cuda.device_count() or 1
@@ -115,11 +126,13 @@ devices = torch.cuda.device_count() or 1
 # global_batch_size = 512
 global_batch_size = 12
 micro_batch_size = 12 # modify me please
-ctx_size = 1024
-# n_embd = 2048
-# intermediate_size = 5632
-n_embd = 1024 # dont change me
-intermediate_size = 5632//2
+ctx_size = 8192
+
+# d_model = 2560
+# n_layer = 64
+d_model = 512
+n_layer = 12
+
 
 log_step_interval = 100
 eval_iters = 1000
@@ -129,7 +142,7 @@ max_tokens = ctx_size*10e6*2
 
 ############
 
-learning_rate = 4e-4
+learning_rate = 1e-4
 warmup_steps = 2000
 
 weight_decay = 1e-1
@@ -167,16 +180,9 @@ def main(fabric, resume):
     if fabric.global_rank == 0:
         out_dir.mkdir(parents=True, exist_ok=True)
 
-    config = Config.from_name(model_name)
     ############## modify the config for mRNA cases
+    config = MambaConfig(d_model=d_model, n_layer=n_layer, vocab_size=len(mrna_tok.map_id_tok)+1)
     config.block_size = ctx_size
-    config.vocab_size = len(mrna_tok.map_id_tok)
-    config.padded_vocab_size = len(mrna_tok.map_id_tok)+1
-    config.n_embd = n_embd
-    config.intermediate_size = intermediate_size
-    config.hf_config['name'] = 'mrna_tinyllama'
-    config.hf_config['org'] = 'Sanofi'
-    config.__post_init__()
     print(mrna_tok.map_id_tok)
     #######
     print(config)
@@ -188,13 +194,12 @@ def main(fabric, resume):
     fabric.print(f"Loading model with {config.__dict__}")
     t0 = time.perf_counter()
     with fabric.init_module(empty_init=False):
-        model = GPT(config)
-        model.apply(partial(init_weights, n_layer=config.n_layer, n_embd=config.n_embd))
+        model = MambaLMHeadModel(config)
 
     fabric.print(f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds.")
     fabric.print(f"Total parameters: {num_parameters(model):,}")
 
-    model = torch.compile(model)
+    # model = torch.compile(model)
     model = fabric.setup(model)
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=learning_rate, weight_decay=weight_decay, betas=(beta1, beta2), fused=True
@@ -230,14 +235,14 @@ def train(fabric, state, train_dataloader, val_dataloader, resume):
     validate(fabric, model, val_dataloader, max_iters=2)  # sanity check
     throughput = ThroughputMonitor(fabric, window_size=5)
 
-    with torch.device("meta"):
-        meta_model = GPT(model.config)
-        x = torch.randint(0, 1, (micro_batch_size, meta_model.config.block_size))
-        model_fwd = lambda: meta_model(x)
-        model_loss = lambda y: chunked_cross_entropy(y, x, chunk_size=0)
-        measured_flops = measure_flops(meta_model, model_fwd, model_loss)
-        fabric.print(f"Measured TFLOPs: {measured_flops * fabric.world_size / 1e12:.2f}")
-        del meta_model, x
+    # with torch.device("meta"):
+    #     meta_model = MambaLMHeadModel(model.config)
+    #     x = torch.randint(0, 1, (micro_batch_size, meta_model.config.block_size))
+    #     model_fwd = lambda: meta_model(x).logits
+    #     model_loss = lambda y: chunked_cross_entropy(y, x, chunk_size=0)
+    #     measured_flops = measure_flops(meta_model, model_fwd, model_loss)
+    #     fabric.print(f"Measured TFLOPs: {measured_flops * fabric.world_size / 1e12:.2f}")
+    #     del meta_model, x
 
     max_tokens_per_device = max_tokens // fabric.world_size
     tokens_per_iter = micro_batch_size * model.config.block_size
@@ -268,7 +273,7 @@ def train(fabric, state, train_dataloader, val_dataloader, resume):
 
         is_accumulating = state["iter_num"] % gradient_accumulation_iters != 0
         with fabric.no_backward_sync(model, enabled=is_accumulating):
-            logits = model(input_ids)
+            logits = model(input_ids).logits
             loss = chunked_cross_entropy(logits, targets)
             fabric.backward(loss / gradient_accumulation_iters)
 
@@ -288,7 +293,7 @@ def train(fabric, state, train_dataloader, val_dataloader, resume):
             t1 = time.perf_counter()
             throughput.update(
                 time=(t1 - total_t0),
-                flops=(measured_flops * log_iter_interval),
+                # flops=(measured_flops * log_iter_interval),
                 batches=state["iter_num"],
                 samples=(state["iter_num"] * micro_batch_size),
                 lengths=(state["iter_num"] * micro_batch_size * model.config.block_size),
@@ -352,7 +357,7 @@ def validate(fabric: L.Fabric, model: nn.Module, val_dataloader: DataLoader, max
         input_ids[input_ids<0] = model.config.vocab_size
         # print('##########', input_ids.shape, input_ids.min(), input_ids.max())
 
-        logits = model(input_ids)
+        logits = model(input_ids).logits
         loss = chunked_cross_entropy(logits, targets)
         losses[k] = loss
 
@@ -372,19 +377,6 @@ def get_lr(it: int, warmup_iters: int, max_iters: int) -> float:
     assert 0 <= decay_ratio <= 1
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
     return min_lr + coeff * (learning_rate - min_lr)
-
-
-def init_weights(module: nn.Module, n_layer: int, n_embd: int):
-    # Follows GPT-NeoX: https://arxiv.org/abs/2204.06745
-    if isinstance(module, nn.Embedding):
-        nn.init.normal_(module.weight, mean=0.0, std=math.sqrt(2.0 / 5 / n_embd))
-    elif isinstance(module, nn.Linear):
-        nn.init.normal_(module.weight, mean=0.0, std=math.sqrt(2.0 / 5 / n_embd))
-        if module.bias is not None:
-            nn.init.zeros_(module.bias)
-    for name, param in module.named_parameters():
-        if name == "proj.weight" and isinstance(module, (LLaMAMLP, CausalSelfAttention)):
-            nn.init.normal_(param, mean=0.0, std=(1 / math.sqrt(n_embd) / n_layer))
 
 
 def choose_logger(logger_name: str, name: str, resume: Union[bool, Path], *args, **kwargs):
