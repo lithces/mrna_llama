@@ -48,7 +48,9 @@ from torch.utils.data import random_split, ConcatDataset
 
 class TokenTensorDataset(LocalDataset):
     '''
-    padding with -1, later will be substituted in train function with vocab_size
+    padding with -1, later will be substituted in train function 
+    - with vocab_size for input
+    - remains -1 for target
     '''
     def __init__(self, local, ctx_size):
         super().__init__(local=local)
@@ -216,7 +218,7 @@ def main(fabric, resume):
     }
 
     if resume is True:
-        resume = max(out_dir.glob("*.pth"), key=(lambda p: int(p.name.split("-")[1])))
+        resume = max(out_dir.glob("*.pth"), key=(lambda p: int(p.name.split("-")[1].split('.')[0])))
     if resume:
         fabric.print(f"Resuming training from {resume}")
         fabric.load(resume, state)
