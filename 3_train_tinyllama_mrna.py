@@ -37,8 +37,37 @@ from torch.utils.data import DataLoader
 from streaming import LocalDataset, StreamingDataset
 import torch
 from torch.utils.data import random_split, ConcatDataset
+import random
+# class TokenTensorDataset(LocalDataset):
+#     def __init__(self, local, ctx_size):
+#         super().__init__(local=local)
+#         self.ctx_size = ctx_size+1 # need to add one for AR nature.
+
+
+#     def __getitem__(self, index: int):
+#         obj = super().__getitem__(index)
+#         dat = torch.tensor(obj['ids'])
+#         L = len(dat)
+#         th = np.random.rand()
+#         if th<0.5:
+#             if L < self.ctx_size:            
+#                 padding = torch.ones(self.ctx_size-L, dtype=torch.int16)*(-1)
+#                 return torch.concat( (dat.to(torch.int16), padding))
+#             else:
+#                 return dat[:self.ctx_size]
+#         else:
+#             if L < self.ctx_size:            
+#                 padding = torch.ones(self.ctx_size-L, dtype=torch.int16)*(-1)
+#                 return torch.concat( (padding, dat.to(torch.int16)))
+#             else:
+#                 return dat[-self.ctx_size:]
 
 class TokenTensorDataset(LocalDataset):
+    '''
+    padding with -1, later will be substituted in train function 
+    - with vocab_size for input
+    - remains -1 for target
+    '''
     def __init__(self, local, ctx_size):
         super().__init__(local=local)
         self.ctx_size = ctx_size+1 # need to add one for AR nature.
@@ -49,18 +78,16 @@ class TokenTensorDataset(LocalDataset):
         dat = torch.tensor(obj['ids'])
         L = len(dat)
         th = np.random.rand()
-        if th<0.5:
-            if L < self.ctx_size:            
-                padding = torch.ones(self.ctx_size-L, dtype=torch.int16)*(-1)
-                return torch.concat( (dat.to(torch.int16), padding))
-            else:
-                return dat[:self.ctx_size]
+        if L < self.ctx_size:
+            padding = torch.ones(self.ctx_size-L, dtype=torch.int16)*(-1)
+            return torch.concat( (dat.to(torch.int16), padding))
         else:
-            if L < self.ctx_size:            
-                padding = torch.ones(self.ctx_size-L, dtype=torch.int16)*(-1)
-                return torch.concat( (padding, dat.to(torch.int16)))
-            else:
-                return dat[-self.ctx_size:]
+            # randomly pickup a starting point
+            diff_L = self.ctx_size - L
+            st = random.randint(0, diff_L)
+            return dat[st:]
+
+
 
 def create_dataloaders(batch_size, block_size):
     # Remote directory (S3 or local filesystem) where dataset is stored

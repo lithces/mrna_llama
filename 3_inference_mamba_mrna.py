@@ -172,7 +172,7 @@ class MyMamba(MambaLMHeadModel):
         return hidden_states
 
 
-def main(fabric, resume):
+def main(fabric, resume):w
     if fabric.global_rank == 0:
         out_dir.mkdir(parents=True, exist_ok=True)
 
