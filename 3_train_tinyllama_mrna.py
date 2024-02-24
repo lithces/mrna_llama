@@ -83,9 +83,9 @@ class TokenTensorDataset(LocalDataset):
             return torch.concat( (dat.to(torch.int16), padding))
         else:
             # randomly pickup a starting point
-            diff_L = self.ctx_size - L
+            diff_L = L - self.ctx_size
             st = random.randint(0, diff_L)
-            return dat[st:]
+            return dat[st:(st+self.ctx_size)]
 
 
 
@@ -106,7 +106,7 @@ def create_dataloaders(batch_size, block_size):
         ,"rodents"
         ,"marsupials"
     ]
-    ds_root = '/data2/data/raw_seqs_cds_pos/np_after_tok_mds/'
+    ds_root = '/data2/data/mrna_llm/raw_seqs_cds_pos/np_after_tok_mds_th20000/'
 
 
 
